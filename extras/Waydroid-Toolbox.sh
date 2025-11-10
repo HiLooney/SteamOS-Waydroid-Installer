@@ -9,6 +9,8 @@ then
 	exit
 fi
 
+QDBUS_BIN=$(command -v qdbus6 || command -v qdbus || echo "")
+
 while true
 do
 Choice=$(zenity --width 850 --height 400 --list --radiolist --multiple --title "Waydroid Toolbox for SteamOS Waydroid script  - https://github.com/ryanrudolfoba/steamos-waydroid-installer"\
@@ -174,14 +176,28 @@ SERVICE_Choice=$(zenity --width 600 --height 220 --list --radiolist --multiple -
 
 elif [ "$Choice" == "LAUNCHER" ]
 then
-	steamos-add-to-steam /home/deck/Android_Waydroid/Android_Waydroid_Cage.sh
-	sleep 5
-	zenity --warning --title "Waydroid Toolbox" --text "Android Waydroid Cage launcher has been added to Game Mode!" --width 450 --height 75
+	launcher_path="$HOME/Android_Waydroid/Android_Waydroid_Cage.sh"
+
+	if ! command -v steamos-add-to-steam &> /dev/null
+	then
+		zenity --error --title "Waydroid Toolbox" --text "steamos-add-to-steam command not found. Add the launcher manually from Steam." --width 450 --height 90
+	elif [ ! -f "$launcher_path" ]
+	then
+		zenity --error --title "Waydroid Toolbox" --text "Launcher script not found at $launcher_path" --width 450 --height 75
+	else
+		steamos-add-to-steam "$launcher_path"
+		sleep 5
+		zenity --warning --title "Waydroid Toolbox" --text "Android Waydroid Cage launcher has been added to Game Mode!" --width 450 --height 75
+	fi
 
 
 
 
 elif [ "$Choice" == "ADD_APPS" ]; then
+    if ! command -v steamos-add-to-steam &> /dev/null; then
+        zenity --error --title "Waydroid Toolbox" --text "steamos-add-to-steam command not found. Cannot automatically add apps to Steam on this system." --width 450 --height 90
+        continue
+    fi
     logged_in_user=$(whoami)
     logged_in_uid=$(id -u "$logged_in_user")
     logged_in_home=$(eval echo "~$logged_in_user")
@@ -566,7 +582,11 @@ EOF
                     ;;
 
                 "Enter Game Mode")
-                    qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
+                    if [ -n "$QDBUS_BIN" ]; then
+                        $QDBUS_BIN org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
+                    else
+                        zenity --error --title "Waydroid Toolbox" --text "qdbus/qdbus6 not found. Please return to Game Mode manually." --width 400 --height 90
+                    fi
                     ;;
             esac
 
@@ -592,8 +612,11 @@ UNINSTALL_Choice=$(zenity --width 600 --height 220 --list --radiolist --multiple
 
 	elif [ "$UNINSTALL_Choice" == "WAYDROID" ]
 	then
-		# disable the steamos readonly
-		echo -e $PASSWORD\n | sudo -S steamos-readonly disable
+		# disable the steamos readonly if available
+		if command -v steamos-readonly &> /dev/null
+		then
+			echo -e "$PASSWORD\n" | sudo -S steamos-readonly disable
+		fi
 	
 		# remove the kernel module and packages installed
 		echo -e "$PASSWORD\n" | sudo -S systemctl stop waydroid-container
@@ -616,16 +639,22 @@ UNINSTALL_Choice=$(zenity --width 600 --height 220 --list --radiolist --multiple
 		# delete contents of ~/Android_Waydroid
 		rm -rf ~/Android_Waydroid/
 	
-		# re-enable the steamos readonly
-		echo -e "$PASSWORD\n" | sudo -S steamos-readonly enable
+		# re-enable the steamos readonly if available
+		if command -v steamos-readonly &> /dev/null
+		then
+			echo -e "$PASSWORD\n" | sudo -S steamos-readonly enable
+		fi
 	
 		zenity --warning --title "Waydroid Toolbox" --text "Waydroid has been uninstalled! Goodbye!" --width 600 --height 75
 		exit
 		
 	elif [ "$UNINSTALL_Choice" == "FULL" ]
 	then
-		# disable the steamos readonly
-		echo -e "$PASSWORD\n" | sudo -S steamos-readonly disable
+		# disable the steamos readonly if available
+		if command -v steamos-readonly &> /dev/null
+		then
+			echo -e "$PASSWORD\n" | sudo -S steamos-readonly disable
+		fi
 	
 		# remove the kernel module and packages installed
 		echo -e "$PASSWORD\n" | sudo -S systemctl stop waydroid-container
@@ -633,7 +662,7 @@ UNINSTALL_Choice=$(zenity --width 600 --height 220 --list --radiolist --multiple
 		echo -e "$PASSWORD\n" | sudo -S pacman -R --noconfirm libglibutil libgbinder python-gbinder waydroid wlroots dnsmasq lxc
 	
 		# delete the waydroid directories and config
-		echo -e $PASSWORD\n | sudo -S rm -rf ~/waydroid /var/lib/waydroid /etc/waydroid-extra ~/.local/share/waydroid ~/.local/share/applications/waydroid* ~/AUR
+			echo -e "$PASSWORD\n" | sudo -S rm -rf ~/waydroid /var/lib/waydroid /etc/waydroid-extra ~/.local/share/waydroid ~/.local/share/applications/waydroid* ~/AUR
 	
 		# delete waydroid config and scripts
 		echo -e "$PASSWORD\n" | sudo -S rm /etc/sudoers.d/zzzzzzzz-waydroid /etc/modules-load.d/waydroid.conf /usr/bin/waydroid-fix-controllers \
@@ -649,8 +678,11 @@ UNINSTALL_Choice=$(zenity --width 600 --height 220 --list --radiolist --multiple
 		# delete contents of ~/Android_Waydroid
 		rm -rf ~/Android_Waydroid/
 	
-		# re-enable the steamos readonly
-		echo -e "$PASSWORD\n" | sudo -S steamos-readonly enable
+		# re-enable the steamos readonly if available
+		if command -v steamos-readonly &> /dev/null
+		then
+			echo -e "$PASSWORD\n" | sudo -S steamos-readonly enable
+		fi
 	
 		zenity --warning --title "Waydroid Toolbox" --text "Waydroid and Android user data has been uninstalled! Goodbye!" --width 600 --height 75
 		exit

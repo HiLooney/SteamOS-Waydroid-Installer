@@ -9,7 +9,6 @@ sleep 2
 
 # define variables here
 script_version_sha=$(git rev-parse --short HEAD)
-steamos_version=$(cat /etc/os-release | grep -i version_id | cut -d "=" -f2)
 WORKING_DIR=$(pwd)
 BINDER_AUR=https://aur.archlinux.org/binder_linux-dkms.git
 BINDER_GITHUB=https://github.com/archlinux/aur.git
@@ -18,7 +17,32 @@ WAYDROID_SCRIPT=https://github.com/casualsnek/waydroid_script.git
 WAYDROID_SCRIPT_DIR=$(mktemp -d)/waydroid_script
 FREE_HOME=$(df /home --output=avail | tail -n1)
 FREE_VAR=$(df /var --output=avail | tail -n1)
-PLUGIN_LOADER=/home/deck/homebrew/services/PluginLoader
+PLUGIN_LOADER=$HOME/homebrew/services/PluginLoader
+KERNEL_RELEASE=$(uname -r)
+KERNEL_BUILD_DIR="/usr/lib/modules/$KERNEL_RELEASE/build"
+NEPTUNE_HEADER_SLOT=$(echo "$KERNEL_RELEASE" | cut -d "-" -f5)
+if [ -n "$NEPTUNE_HEADER_SLOT" ]
+then
+	STEAMOS_HEADER_PACKAGE="linux-neptune-${NEPTUNE_HEADER_SLOT}-headers"
+else
+	STEAMOS_HEADER_PACKAGE=""
+fi
+CACHY_HEADER_CANDIDATES=("linux-cachyos-headers" "linux-cachyos-rt-headers" "linux-cachyos-lqx-headers")
+CACHY_HEADER_CANDIDATES=("linux-cachyos-headers" "linux-cachyos-rt-headers" "linux-cachyos-lqx-headers")
+GENERIC_HEADER_PACKAGE="linux-headers"
+CACHY_HEADER_PACKAGE=""
+if echo "$KERNEL_RELEASE" | grep -qi cachyos
+then
+	for candidate in "${CACHY_HEADER_CANDIDATES[@]}"
+	do
+		if pacman -Si "$candidate" &> /dev/null
+		then
+			CACHY_HEADER_PACKAGE="$candidate"
+			break
+		fi
+	done
+fi
+QDBUS_BIN=$(command -v qdbus6 || command -v qdbus || echo "")
 
 # android TV builds
 ANDROID13_TV_IMG=https://github.com/ryanrudolfoba/SteamOS-Waydroid-Installer/releases/download/Android13TV/lineage-20-20250117-UNOFFICIAL-10MinuteSteamDeckGamer-WaydroidATV.zip
@@ -60,21 +84,67 @@ else
 fi
 
 # unlock the readonly and initialize keyring using the devmode method
-echo Unlocking SteamOS and initializing keyring via steamos-devmode. This can take a while.
-echo -e "$current_password\n" | sudo -S steamos-devmode enable --no-prompt &> /dev/null
-
-if [ $? -eq 0 ]
+if command -v steamos-devmode &> /dev/null
 then
-	echo pacman keyring has been initialized!
+	echo Unlocking SteamOS and initializing keyring via steamos-devmode. This can take a while.
+	echo -e "$current_password\n" | sudo -S steamos-devmode enable --no-prompt &> /dev/null
+
+	if [ $? -eq 0 ]
+	then
+		echo pacman keyring has been initialized!
+	else
+		echo Error initializing keyring!
+		cleanup_exit
+	fi
 else
-	echo Error initializing keyring!
-	cleanup_exit
+	echo steamos-devmode not detected. Assuming the filesystem is already writable and pacman keyring initialized.
 fi
 
 # lets install the packages needed to build binder
+BUILD_DEPENDENCIES=(fakeroot debugedit dkms plymouth)
+INSTALL_PACKAGES=("${BUILD_DEPENDENCIES[@]}")
+
+echo "Detected kernel release: $KERNEL_RELEASE"
+echo "Checking for headers at $KERNEL_BUILD_DIR"
+
+if [ -d "$KERNEL_BUILD_DIR" ]
+then
+	echo "Kernel headers already present at $KERNEL_BUILD_DIR. Skipping header package installation."
+else
+	echo "Kernel headers directory not found. Attempting to install a matching headers package."
+	HEADER_TO_INSTALL=""
+	if [ -n "$STEAMOS_HEADER_PACKAGE" ] && pacman -Si "$STEAMOS_HEADER_PACKAGE" &> /dev/null
+	then
+		HEADER_TO_INSTALL="$STEAMOS_HEADER_PACKAGE"
+		echo "SteamOS kernel flavor detected. Will install header package: $HEADER_TO_INSTALL"
+	elif [ -n "$CACHY_HEADER_PACKAGE" ]
+	then
+		HEADER_TO_INSTALL="$CACHY_HEADER_PACKAGE"
+		if pacman -Q "$HEADER_TO_INSTALL" &> /dev/null
+		then
+			echo "$HEADER_TO_INSTALL is already installed. Using existing CachyOS headers for $KERNEL_RELEASE."
+		else
+			echo "CachyOS kernel flavor detected. Will install header package: $HEADER_TO_INSTALL"
+		fi
+	elif pacman -Si "$GENERIC_HEADER_PACKAGE" &> /dev/null
+	then
+		HEADER_TO_INSTALL="$GENERIC_HEADER_PACKAGE"
+		echo "Falling back to generic Arch headers package: $HEADER_TO_INSTALL"
+	else
+		echo "Unable to find a kernel headers package automatically for $KERNEL_RELEASE."
+		echo "Install the package that provides $KERNEL_BUILD_DIR (e.g. linux-cachyos-headers) and re-run the installer."
+		cleanup_exit
+	fi
+
+	if [ -n "$HEADER_TO_INSTALL" ]
+	then
+		INSTALL_PACKAGES+=("$HEADER_TO_INSTALL")
+	fi
+fi
+
 echo Installing packages needed to build binder module from source. This can take a while.
-echo -e "$current_password\n" | sudo -S pacman -S --noconfirm fakeroot debugedit dkms plymouth \
-	linux-neptune-$(uname -r | cut -d "-" -f5)-headers --overwrite "*"
+echo "Package list: ${INSTALL_PACKAGES[*]}"
+echo -e "$current_password\n" | sudo -S pacman -S --needed --noconfirm "${INSTALL_PACKAGES[@]}" --overwrite "*"
 
 if [ $? -eq 0 ]
 then
@@ -164,8 +234,13 @@ then
 		echo -e "$current_password\n" | sudo -S ln -s ~/waydroid/custom /etc/waydroid-extra/images &> /dev/null
 	fi
 
-	# all done lets re-enable the readonly
-	echo -e "$current_password\n" | sudo -S steamos-readonly enable
+	# all done lets re-enable the readonly if supported
+	if command -v steamos-readonly &> /dev/null
+	then
+		echo -e "$current_password\n" | sudo -S steamos-readonly enable
+	else
+		echo steamos-readonly not detected. Skipping immutable FS re-enable step.
+	fi
 	echo Waydroid has been successfully installed!
 else
 	echo Downloading waydroid image from sourceforge.
@@ -244,6 +319,8 @@ else
 	# change GPU rendering to use minigbm_gbm_mesa
 	echo -e $PASSWORD\n | sudo -S sed -i "s/ro.hardware.gralloc=.*/ro.hardware.gralloc=minigbm_gbm_mesa/g" /var/lib/waydroid/waydroid_base.prop
 
+if command -v steamos-add-to-steam &> /dev/null
+then
 	echo "Adding shortcuts to Game Mode. Please wait..."
 
 	logged_in_user=$(whoami)
@@ -273,11 +350,17 @@ EOF
 	sleep 3
 	echo Waydroid shortcut has been added to Game Mode.
 
-	steamos-add-to-steam /usr/bin/steamos-nested-desktop  &> /dev/null
-	sleep 15
-	echo steamos-nested-desktop shortcut has been added to Game Mode.
+	if [ -x /usr/bin/steamos-nested-desktop ]
+	then
+		steamos-add-to-steam /usr/bin/steamos-nested-desktop  &> /dev/null
+		sleep 15
+		echo steamos-nested-desktop shortcut has been added to Game Mode.
+	else
+		echo /usr/bin/steamos-nested-desktop not found on this system.
+		echo Use Steam\'s "Add Non-Steam Game" option to add your preferred desktop session manually \(e.g. gamescope-session or plasma-desktop\).
+	fi
 
-python3 - << 'EOF'
+	python3 - << 'EOF'
 #!/usr/bin/env python3
 import os
 import re
@@ -426,11 +509,20 @@ if __name__ == "__main__":
 EOF
 
 	rm -f "$TMP_DESKTOP"
+else
+	echo steamos-add-to-steam not detected. Skipping automatic Game Mode shortcut creation.
+	echo Use Steam\'s "Add Non-Steam Game" option to add ~/Android_Waydroid/Android_Waydroid_Cage.sh and your desktop session manually.
+fi
 
 
-	# all done lets re-enable the readonly
+# all done lets re-enable the readonly if supported
+if command -v steamos-readonly &> /dev/null
+then
 	echo -e "$current_password\n" | sudo -S steamos-readonly enable
-	echo Waydroid has been successfully installed!
+else
+	echo steamos-readonly not detected. Skipping immutable FS re-enable step.
+fi
+echo Waydroid has been successfully installed!
 fi
 
 # sanity check - re-enable decky loader service if it's installed.
@@ -441,5 +533,10 @@ then
 fi
 
 if zenity --question --text="Do you Want to Return to Gaming Mode?"; then
-	qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
+	if [ -n "$QDBUS_BIN" ]
+	then
+		$QDBUS_BIN org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
+	else
+		echo "qdbus/qdbus6 not found. Please switch back to Gaming Mode manually."
+	fi
 fi

@@ -11,25 +11,8 @@ else
 	exit
 fi
 
-# sanity check - make sure this is running on at least SteamOS 3.6.x or 3.7.x
-echo $steamos_version | grep -e 3.4 -e 3.5
-if [ $? -ne 0 ]
-then
-	echo SteamOS $steamos_version detected. Proceed to the next step.
-else
-	echo SteamOS $steamos_version detected. This is unsupported version.
-	exit
-fi
-
-# sanity check - make sure the update channel is rel (stable) or beta
-steamos-select-branch -c | grep -e rel -e beta &> /dev/null
-if [ $? -eq 0 ]
-then
-	echo SteamOS $(steamos-select-branch -c) branch detected. Proceed to the next step.
-else
-	echo SteamOS $(steamos-select-branch -c) branch detected. This script is only tested to work with STABLE or BETA branch of SteamOS.
-	exit
-fi
+# sanity check - skip SteamOS-specific version and branch checks to allow other Arch-based builds
+echo Skipping SteamOS version and branch checks. Ensure your distro meets the prerequisites documented in the README.
 
 # sanity check - make sure there is enough free space in the home partition (at least 5GB)
 echo Checking if home partition has enough free space
@@ -101,4 +84,3 @@ then
 		exit
 	fi
 fi
-
